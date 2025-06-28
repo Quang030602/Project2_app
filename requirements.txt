@@ -1,3 +1,12 @@
 streamlit
-pyngrok
-google
+pandas
+numpy
+scikit-learn
+matplotlib
+seaborn
+gensim
+imbalanced-learn
+xgboost
+underthesea
+openpyxl
+joblib

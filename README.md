@@ -7,6 +7,8 @@ This Streamlit app helps visualize and analyze Vietnamese company reviews using 
 - Text cleaning with Vietnamese stopwords
 - Data visualization (ratings, review analysis)
 - Ready for Streamlit Cloud or local use
+- **Topic 1**: Company Recommendation System using TF-IDF and Gensim
+- **Topic 2**: Candidate Classification using various ML models (Logistic Regression, SVM, XGBoost)
 
 ## 📁 Project Structure
 ```
@@ -36,7 +38,17 @@ This Streamlit app helps visualize and analyze Vietnamese company reviews using 
    pip install -r requirements.txt
    ```
 
-3. Run the app:
+3. Prepare data:
+   - Create a `data` directory in the project root
+   - Place your Excel files in the `data` directory:
+     - `Overview_Companies.xlsx`
+     - `Reviews.xlsx`
+     - `Overview_Reviews.xlsx`
+   - Create a `data/files` subdirectory for text files:
+     - `vietnamese-stopwords.txt`
+     - `wrong-word.txt`
+
+4. Run the app:
    ```bash
    streamlit run gui_project02_Final.py
    ```
