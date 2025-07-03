@@ -8,7 +8,7 @@ import gensim
 import re
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics.pairwise import cosine_similarity
 from gensim import models as gensim_models, corpora, similarities
@@ -81,13 +81,41 @@ def remove_stopwords(tokens):
 # ================== LOAD MODEL & ENCODER ==================
 @st.cache_resource
 def load_all_models():
+    import os
+    import warnings
+    
+    # Check if all model files exist
+    model_files = [
+        (LABEL_ENCODER_PATH, "Label Encoder"),
+        (ONEHOT_ENCODER_PATH, "OneHot Encoder"), 
+        (TFIDF_VECTORIZER_PATH, "TF-IDF Vectorizer"),
+        (XGB_MODEL_PATH, "XGBoost Model")
+    ]
+    
+    missing_files = []
+    for file_path, file_name in model_files:
+        if not os.path.exists(file_path):
+            missing_files.append(f"{file_name} ({file_path})")
+    
+    if missing_files:
+        st.warning(f"⚠️ Missing model files: {', '.join(missing_files)}")
+        return None, None, None, None
+    
     try:
         label_encoder = joblib.load(LABEL_ENCODER_PATH)
         onehot_encoder = joblib.load(ONEHOT_ENCODER_PATH)
         tfidf_vectorizer = joblib.load(TFIDF_VECTORIZER_PATH)
-        xgb_model = joblib.load(XGB_MODEL_PATH)
+        
+        # Load XGBoost model with warning suppression
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=UserWarning, message=".*If you are loading a serialized model.*")
+            xgb_model = joblib.load(XGB_MODEL_PATH)
+            
+        st.success("✅ All models loaded successfully!")
         return label_encoder, onehot_encoder, tfidf_vectorizer, xgb_model
-    except:
+        
+    except Exception as e:
+        st.error(f"❌ Error loading models: {str(e)}")
         return None, None, None, None
 
 label_encoder, onehot_encoder, tfidf_vectorizer, xgb_model = load_all_models()
@@ -504,172 +532,294 @@ with tab1:
     else:
         st.warning("Không thể tải hoặc công ty không có dữ liệu.")
 
-# ================== TOPIC 2: CANDIDATE CLASSIFICATION ==================
+# ================== TOPIC 2: CANDIDATE FIT CLASSIFICATION ==================
 with tab2:
-    st.header("Topic 2: Candidate Classification System")
+    st.header("Topic 2: Candidate Fit Classification")
+    st.markdown("Dựa trên thông tin đánh giá từ nhân viên đã review trên ITViec, dự đoán xem họ có recommend công ty hay không.")
     
-    @st.cache_data
-    def load_candidate_classification_data():
-        df = pd.read_excel(COMPANY_FILE)
-        df = df[['Company Name', 'Company overview']].dropna().copy()
-        df['tokens'] = df['Company overview'].apply(lambda x: gensim.utils.simple_preprocess(x))
-        df['tokens_cleaned'] = df['tokens'].apply(clean_tokens)
-        df['tokens_final'] = df['tokens_cleaned'].apply(remove_stopwords)
-        df = df[df['tokens_final'].str.len() > 0].copy()
-        df['joined_tokens'] = df['tokens_final'].apply(lambda tokens: ' '.join(tokens))
-        return df
-
-    df_candidates = load_candidate_classification_data()
-
-    if df_candidates is not None and not df_candidates.empty and tfidf_vectorizer is not None and xgb_model is not None:
-        try:
-            # Vectorize the text data
-            X_candidates = tfidf_vectorizer.transform(df_candidates['joined_tokens'])
-
-            # Predict with the XGBoost model (sửa lại cách predict)
-            df_candidates['predicted_label'] = xgb_model.predict(X_candidates)
-
-            # Map the predicted labels to actual labels (sửa lại cách sử dụng label encoder)
-            if label_encoder is not None:
-                df_candidates['predicted_label'] = label_encoder.inverse_transform(df_candidates['predicted_label'].astype(int))
-            else:
-                # Nếu không có label encoder, map trực tiếp
-                label_map = {0: 'Low', 1: 'Medium', 2: 'High'}
-                df_candidates['predicted_label'] = df_candidates['predicted_label'].map(label_map)
-
-            st.write("Dưới đây là một số dự đoán về phân loại ứng viên:")
-            st.dataframe(df_candidates[['Company Name', 'predicted_label']].head(10))
-            
-        except Exception as e:
-            st.error(f"❌ Lỗi khi predict: {str(e)}")
-            st.write("Có thể model hoặc vectorizer không tương thích với dữ liệu hiện tại.")
-    else:
-        st.warning("❌ Không thể tải model, vectorizer hoặc dữ liệu ứng viên.")
-
-    st.write("---")
-    
-    # ================ UPLOAD CV SECTION ================
-    st.subheader("📤 Tải lên CV của bạn để phân loại")
-    uploaded_file = st.file_uploader("Chọn file CV của bạn (định dạng .txt hoặc .pdf)", type=["txt", "pdf"])
-    
-    if uploaded_file is not None:
-        try:
-            # Read the uploaded file
-            if uploaded_file.name.endswith('.txt'):
-                cv_text = uploaded_file.read().decode("utf-8")
-            else:
-                # Convert PDF to text
-                import PyPDF2
-                pdf_reader = PyPDF2.PdfReader(uploaded_file)
-                cv_text = ""
-                for page in pdf_reader.pages:
-                    cv_text += page.extract_text()
-            
-            # Kiểm tra nếu có text
-            if not cv_text.strip():
-                st.warning("⚠️ Không thể đọc text từ file. Vui lòng kiểm tra lại file.")
-            else:
-                # Preprocess the CV text
-                cv_tokens = gensim.utils.simple_preprocess(cv_text)
-                cv_tokens_clean = remove_stopwords(clean_tokens(cv_tokens))
-                cv_joined = ' '.join(cv_tokens_clean)
-                
-                # Kiểm tra nếu có text sau preprocessing
-                if not cv_joined.strip():
-                    st.warning("⚠️ Không có text hợp lệ sau khi xử lý. Vui lòng kiểm tra nội dung file.")
-                else:
-                    # Vectorize the CV
-                    cv_vectorized = tfidf_vectorizer.transform([cv_joined])
-                    
-                    # Predict with the XGBoost model (sửa lại)
-                    cv_prediction = xgb_model.predict(cv_vectorized)
-                    
-                    # Xử lý kết quả prediction
-                    if label_encoder is not None:
-                        cv_predicted_label = label_encoder.inverse_transform(cv_prediction.astype(int))[0]
-                    else:
-                        # Fallback mapping
-                        label_map = {0: 'Low', 1: 'Medium', 2: 'High'}
-                        cv_predicted_label = label_map.get(int(cv_prediction[0]), 'Unknown')
-                    
-                    # Hiển thị kết quả với style đẹp hơn
-                    st.success(f"✅ **CV của bạn đã được phân loại là: {cv_predicted_label}**")
-                    
-                    # Hiển thị confidence score nếu có
-                    try:
-                        cv_proba = xgb_model.predict_proba(cv_vectorized)
-                        max_proba = cv_proba.max()
-                        st.info(f"🎯 **Độ tin cậy:** {max_proba:.2%}")
-                    except:
-                        pass
-                    
-                    # Provide feedback and improvement suggestions
-                    st.write("---")
-                    st.subheader("🛠️ Gợi ý cải thiện CV")
-                    
-                    # Enhanced feedback
-                    feedback = {
-                        "High": "🔥 **Tuyệt vời!** CV của bạn có chất lượng cao. Hãy tiếp tục duy trì và cập nhật thường xuyên.",
-                        "Medium": "👍 **Khá tốt!** CV có thể được cải thiện thêm:\n- Thêm các dự án cụ thể\n- Nêu rõ thành tích bằng số liệu\n- Cập nhật kỹ năng mới",
-                        "Low": "⚠️ **Cần cải thiện:** CV cần được nâng cấp:\n- Bổ sung kinh nghiệm cụ thể\n- Thêm kỹ năng chuyên môn\n- Cải thiện cách trình bày\n- Thêm chứng chỉ/khóa học liên quan",
-                        "IT/Software": "💻 **Kỹ thuật:** Nhấn mạnh kỹ năng lập trình, framework, và dự án đã thực hiện.",
-                        "Marketing": "📢 **Marketing:** Thêm số liệu cụ thể về campaign và ROI đã đạt được.",
-                        "Sales": "💼 **Kinh doanh:** Làm nổi bật kỹ năng đàm phán và target đã hoàn thành.",
-                        "HR": "👥 **Nhân sự:** Nhấn mạnh kinh nghiệm quản lý người và giải quyết xung đột.",
-                        "Finance": "💰 **Tài chính:** Cần các chứng chỉ CPA, CFA và kinh nghiệm phân tích tài chính."
-                    }
-                    
-                    if cv_predicted_label in feedback:
-                        st.markdown(feedback[cv_predicted_label])
-                    else:
-                        st.info("📋 Hãy chắc chắn rằng CV nêu bật được kỹ năng và kinh nghiệm liên quan đến vị trí ứng tuyển.")
-                    
-                    # Hiển thị preview một phần CV đã xử lý
-                    with st.expander("👀 Xem preview text đã xử lý"):
-                        st.text(cv_joined[:500] + "..." if len(cv_joined) > 500 else cv_joined)
+    # Load additional libraries for Topic 2
+    try:
+        from underthesea import word_tokenize
+        from collections import Counter
+        from scipy.sparse import hstack
+        from sklearn.preprocessing import StandardScaler
         
+        # Try to import SMOTE, but continue without it if not available
+        try:
+            from imblearn.over_sampling import SMOTE
+            SMOTE_AVAILABLE = True
+        except ImportError:
+            SMOTE_AVAILABLE = False
+            st.info("ℹ️ SMOTE not available for balancing data. Install with: pip install imbalanced-learn")
+            
+    except ImportError as e:
+        st.error(f"❌ Missing required libraries: {str(e)}")
+        st.info("Please install: pip install underthesea imbalanced-learn xgboost")
+        st.stop()
+
+    # Load data function for Topic 2
+    @st.cache_data
+    def load_review_data():
+        try:
+            reviews = pd.read_excel(REVIEW_FILE)
+            overview_reviews = pd.read_excel(OVERVIEW_REVIEW_FILE)
+            
+            # Check if Reviews already has Company Name (which it likely does based on earlier output)
+            if 'Company Name' in reviews.columns:
+                # Direct merge using Company Name
+                data = reviews.merge(overview_reviews[["Company Name", "Overall rating"]], on="Company Name", how="left")
+                
+                # Fill missing ratings with default value
+                data['Overall rating'] = data['Overall rating'].fillna(3.0)
+                
+                st.info(f"📎 Loaded {len(data)} reviews from {len(data['Company Name'].unique())} companies")
+                return data
+            else:
+                # Fallback to ID-based merge if Company Name not present
+                overview_companies = pd.read_excel(COMPANY_FILE)
+                
+                # Rename columns for consistency
+                overview_reviews = overview_reviews.rename(columns={"id": "company_id"})
+                overview_companies = overview_companies.rename(columns={"id": "company_id"})
+
+                # Merge data
+                data = reviews.merge(overview_reviews[["company_id", "Overall rating"]], left_on="id", right_on="company_id", how="left")
+                data = data.merge(overview_companies[["company_id", "Company Name", "Company Type", "Company size"]], on="company_id", how="left")
+
+                # Fill missing ratings with default value
+                data['Overall rating'] = data['Overall rating'].fillna(3.0)
+                
+                st.info(f"📎 Loaded {len(data)} reviews from {len(data['Company Name'].unique())} companies")
+                return data
+                
         except Exception as e:
-            st.error(f"❌ Lỗi khi xử lý CV: {str(e)}")
-            st.write("Vui lòng thử lại với file khác hoặc kiểm tra định dạng file.")
+            st.error(f"❌ Error loading review data: {str(e)}")
+            return None
+
+    # Load Vietnamese stopwords and wrong words
+    @st.cache_data
+    def load_text_processing_data():
+        try:
+            # Try to load from local files first
+            stopwords = set()
+            wrong_words = set()
+            
+            # If files exist locally, load them
+            import os
+            if os.path.exists("vietnamese-stopwords.txt"):
+                with open("vietnamese-stopwords.txt", encoding="utf-8") as f:
+                    stopwords = set(f.read().splitlines())
+            
+            if os.path.exists("wrong-word.txt"):
+                with open("wrong-word.txt", encoding="utf-8") as f:
+                    wrong_words = set(f.read().splitlines())
+            
+            # If no local files, use default Vietnamese stopwords
+            if not stopwords:
+                stopwords = set([
+                    "và", "của", "là", "có", "trong", "được", "cho", "từ", "với", "về", "này", "đó", "một", "các", "những", "người", "tôi", "bạn", "họ", "chúng", "ta", "không", "rất", "nhiều", "ít", "lại", "cũng", "đã", "sẽ", "đang", "thì", "để", "khi", "nếu", "mà", "nên", "phải", "nó", "việc", "lúc", "hay", "hoặc", "nhưng", "tuy", "vẫn", "chỉ", "như", "theo", "sau", "trước", "ngoài", "giữa", "dưới", "trên", "gần", "xa", "bên", "cạnh"
+                ])
+            
+            return stopwords, wrong_words
+        except Exception as e:
+            st.warning(f"Using default stopwords due to error: {str(e)}")
+            return set(["và", "của", "là", "có", "trong", "được", "cho", "từ", "với"]), set()
+
+    # Text cleaning function
+    def clean_text(text, stopwords, wrong_words):
+        if pd.isnull(text):
+            return ""
+        text = str(text).lower()
+        text = re.sub(r'[^a-zA-Z0-9áàảãạăắằẳẵặâấầẩẫậđéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵ\s]', ' ', text)
+        text = re.sub(r'\d+', ' ', text)
+        text = re.sub(r'\s+', ' ', text)
+        
+        # Use simple split if underthesea fails
+        try:
+            text = word_tokenize(text, format="text")
+        except:
+            pass
+            
+        words = [w for w in text.split() if w not in stopwords and w not in wrong_words and len(w) > 2]
+        return " ".join(words)
+
+    # Suggestion classification function
+    def suggest_improvement(text):
+        if pd.isnull(text):
+            return "Không có góp ý tiêu cực"
+        text = str(text).lower()
+        negative_keywords = [
+            "không", "thiếu", "chưa", "overtime", "lương thấp", "lương_thấp",
+            "áp lực", "áp_lực", "chậm", "tệ", "bất công", "bất_công", "quá tải", "quá_tải", "stress"
+        ]
+        for kw in negative_keywords:
+            if kw in text:
+                return "Cần cải thiện: " + kw.replace("_", " ")
+        return "Không có góp ý tiêu cực"
+
+    # Load data
+    df_reviews = load_review_data()
     
-    # ================== CV STATISTICS ==================
-    if df_candidates is not None and not df_candidates.empty:
-        with st.expander("📊 Thống kê phân loại CV"):
-            if 'predicted_label' in df_candidates.columns:
-                label_counts = df_candidates['predicted_label'].value_counts()
+    if df_reviews is not None and not df_reviews.empty:
+        # Check for column name variations and standardize
+        column_mappings = {
+            'What I liked': ['What I liked', 'What I liked about the job', 'Liked'],
+            'Suggestions for improvement': ['Suggestions for improvement', 'Suggestions', 'Improvement suggestions'],
+            'Recommend?': ['Recommend?', 'Recommend', 'Would you recommend?', 'Recommend working here to a friend']
+        }
+        
+        # Map columns to standard names
+        for standard_name, variations in column_mappings.items():
+            for variation in variations:
+                if variation in df_reviews.columns:
+                    if variation != standard_name:
+                        df_reviews = df_reviews.rename(columns={variation: standard_name})
+                    break
+        
+        # Check if required columns exist after mapping
+        required_columns = ['What I liked', 'Suggestions for improvement', 'Recommend?']
+        missing_columns = [col for col in required_columns if col not in df_reviews.columns]
+        
+        if missing_columns:
+            st.error(f"❌ Missing required columns: {missing_columns}")
+            st.write("Available columns:", df_reviews.columns.tolist())
+            st.write("Expected columns:", required_columns)
+        else:
+            # Load text processing data
+            stopwords, wrong_words = load_text_processing_data()
+            
+            # Apply text cleaning
+            with st.spinner("🔄 Processing review data..."):
+                df_reviews['What I liked_clean'] = df_reviews['What I liked'].apply(lambda x: clean_text(x, stopwords, wrong_words))
+                df_reviews['Suggestions_clean'] = df_reviews['Suggestions for improvement'].apply(suggest_improvement)
+                df_reviews['text_combined'] = df_reviews['What I liked_clean'] + ' ' + df_reviews['Suggestions_clean']
+            
+            # Display data overview
+            st.subheader("📊 Data Overview")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Reviews", len(df_reviews))
+            with col2:
+                recommend_dist = df_reviews['Recommend?'].value_counts()
+                st.metric("Recommend: Yes", recommend_dist.get('Yes', 0))
+            with col3:
+                st.metric("Recommend: No", recommend_dist.get('No', 0))
+            
+            # Show recommendation distribution
+            if len(recommend_dist) > 0:
+                st.subheader("📈 Recommendation Distribution")
+                fig_dist, ax = plt.subplots(figsize=(8, 4))
+                recommend_dist.plot(kind='bar', ax=ax, color=['#FF6B6B', '#4ECDC4'])
+                ax.set_title('Distribution of Recommendations')
+                ax.set_xlabel('Recommendation')
+                ax.set_ylabel('Count')
+                plt.xticks(rotation=0)
+                st.pyplot(fig_dist)
                 
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.write("**Phân bố labels:**")
-                    for label, count in label_counts.items():
-                        percentage = (count / len(df_candidates)) * 100
-                        st.write(f"- **{label}**: {count} ({percentage:.1f}%)")
-                
-                with col2:
-                    # Tạo simple bar chart
-                    fig, ax = plt.subplots(figsize=(8, 4))
-                    label_counts.plot(kind='bar', ax=ax, color=['#FF6B6B', '#4ECDC4', '#45B7D1'])
-                    ax.set_title('Phân bố Classification Labels')
-                    ax.set_xlabel('Labels')
-                    ax.set_ylabel('Số lượng')
-                    plt.xticks(rotation=45)
-                    st.pyplot(fig)
-    # ================== FOOTER ==================
-    st.write("---")
-    st.markdown("### 🤖 Về chúng tôi")
-    st.write("Đây là hệ thống gợi ý công ty và phân loại ứng viên dựa trên nội dung CV và yêu cầu công việc.")
-    st.write("Mọi ý kiến đóng góp xin gửi về email: contact@ourcompany.com")
-    st.markdown("### 📊 Công nghệ sử dụng")
-    st.write("- Streamlit: Giao diện người dùng")
-    st.write("- Pandas, NumPy: Xử lý dữ liệu")
-    st.write("- Scikit-learn: Các thuật toán máy học")
-    st.write("- Gensim: Xử lý ngôn ngữ tự nhiên")
-    st.write("- Matplotlib, Seaborn: Vẽ biểu đồ")
-    st.write("- XGBoost: Mô hình dự đoán nâng cao")
-    st.write("- PyPDF2: Xử lý file PDF")
-    st.write("- Joblib: Lưu trữ và tải mô hình")
-    st.write("- OpenAI GPT-3.5: Tạo phản hồi và gợi ý cải thiện CV")
-    st.write("- Google Search API: Tìm kiếm thông tin công ty")
-    st.write("- Email API: Gửi email chứa CV")
-    st.write("- và nhiều thư viện khác...")
-    st.write("Chúng tôi liên tục cải thiện hệ thống. Phiên bản hiện tại: 1.0.0")
+            # Add model training and prediction section
+            st.subheader("🤖 Machine Learning Models")
+            
+            # Prepare features for ML
+            if len(df_reviews) > 100:  # Only train if we have enough data
+                try:
+                    # Feature engineering
+                    tfidf = TfidfVectorizer(max_features=5000, ngram_range=(1, 2), stop_words='english')
+                    X_text = tfidf.fit_transform(df_reviews['text_combined'].fillna(''))
+                    
+                    # Add numerical features
+                    numerical_features = []
+                    if 'Overall rating' in df_reviews.columns:
+                        numerical_features.append(df_reviews['Overall rating'].fillna(3.0).values.reshape(-1, 1))
+                    
+                    # Combine features
+                    if numerical_features:
+                        scaler = StandardScaler()
+                        numerical_scaled = scaler.fit_transform(np.hstack(numerical_features))
+                        X_combined = hstack([X_text, numerical_scaled])
+                    else:
+                        X_combined = X_text
+                    
+                    # Convert to CSR format for indexing
+                    X_combined = X_combined.tocsr()
+                    
+                    # Prepare target variable
+                    y = df_reviews['Recommend?'].map({'Yes': 1, 'No': 0})
+                    y = y.dropna()
+                    
+                    # Handle sparse matrix indexing properly
+                    valid_indices = y.index.tolist()
+                    X_final = X_combined[valid_indices]
+                    
+                    if len(y) > 50 and len(y.unique()) > 1:  # Ensure we have enough samples and both classes
+                        # Split data
+                        X_train, X_test, y_train, y_test = train_test_split(X_final, y, test_size=0.3, random_state=42, stratify=y)
+                        
+                        # Handle imbalanced data
+                        if SMOTE_AVAILABLE and len(y_train) > 100:
+                            try:
+                                smote = SMOTE(random_state=42)
+                                X_train_balanced, y_train_balanced = smote.fit_resample(X_train, y_train)
+                                st.info("✅ Data balanced using SMOTE")
+                            except Exception as smote_error:
+                                X_train_balanced, y_train_balanced = X_train, y_train
+                                st.warning(f"SMOTE failed: {smote_error}. Using original data.")
+                        else:
+                            X_train_balanced, y_train_balanced = X_train, y_train
+                            if not SMOTE_AVAILABLE:
+                                st.info("ℹ️ Using original data without balancing")
+                        
+                        # Train models
+                        models = {
+                            'Logistic Regression': LogisticRegression(random_state=42, max_iter=1000),
+                            'SVM': SVC(random_state=42, probability=True),
+                            'XGBoost': xgb.XGBClassifier(random_state=42, eval_metric='logloss')
+                        }
+                        
+                        results = {}
+                        for name, model in models.items():
+                            with st.spinner(f"Training {name}..."):
+                                model.fit(X_train_balanced, y_train_balanced)
+                                y_pred = model.predict(X_test)
+                                accuracy = accuracy_score(y_test, y_pred)
+                                f1 = f1_score(y_test, y_pred)
+                                results[name] = {'accuracy': accuracy, 'f1': f1, 'model': model}
+                        
+                        # Display results
+                        st.write("### Model Performance:")
+                        results_df = pd.DataFrame({name: {'Accuracy': res['accuracy'], 'F1-Score': res['f1']} 
+                                                 for name, res in results.items()}).T
+                        st.dataframe(results_df.round(4))
+                        
+                        # Show best model
+                        best_model_name = max(results.keys(), key=lambda x: results[x]['f1'])
+                        st.success(f"🏆 Best Model: **{best_model_name}** (F1-Score: {results[best_model_name]['f1']:.4f})")
+                        
+                    else:
+                        st.warning("Not enough data for model training (need >50 samples with both Yes/No recommendations)")
+                        
+                except Exception as e:
+                    st.error(f"Error in model training: {str(e)}")
+            else:
+                st.warning("Not enough data for model training (need >100 reviews)")
+    else:
+        st.warning("❌ Could not load review data for classification.")
+
+# ================== FOOTER ==================
+st.write("---")
+st.markdown("### 🤖 Về chúng tôi")
+st.write("Đây là hệ thống gợi ý công ty và phân loại ứng viên dựa trên nội dung CV và yêu cầu công việc.")
+st.write("Mọi ý kiến đóng góp xin gửi về email: contact@ourcompany.com")
+st.markdown("### 📊 Công nghệ sử dụng")
+st.write("- Streamlit: Giao diện người dùng")
+st.write("- Pandas, NumPy: Xử lý dữ liệu")
+st.write("- Scikit-learn: Các thuật toán máy học")
+st.write("- Gensim: Xử lý ngôn ngữ tự nhiên")
+st.write("- Matplotlib, Seaborn: Vẽ biểu đồ")
+st.write("- XGBoost: Mô hình dự đoán nâng cao")
+st.write("- PyPDF2: Xử lý file PDF")
+st.write("- Joblib: Lưu trữ và tải mô hình")
+st.write("- OpenAI GPT-3.5: Tạo phản hồi và gợi ý cải thiện CV")
+st.write("- Google Search API: Tìm kiếm thông tin công ty")
+st.write("- Email API: Gửi email chứa CV")
+st.write("- và nhiều thư viện khác...")
+st.write("Chúng tôi liên tục cải thiện hệ thống. Phiên bản hiện tại: 1.0.0")
