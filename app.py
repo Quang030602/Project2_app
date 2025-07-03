@@ -331,6 +331,10 @@ with tab1:
                         if not company_info.empty:
                             company_info = company_info.iloc[0]
                             
+                            # Lấy thông tin rating từ df_overview_reviews
+                            rating_info = df_overview_reviews[df_overview_reviews['Company Name'] == company_info['Company Name']]
+                            overall_rating = rating_info['Overall rating'].iloc[0] if not rating_info.empty else 3.0  # Default rating if not found
+                            
                             # Lọc theo loại hình công ty
                             if len(preferred_types) > 0:
                                 if company_info['Company Type'] not in preferred_types:
@@ -342,7 +346,7 @@ with tab1:
                                     continue
                             
                             # Lọc theo rating tối thiểu
-                            if company_info['Overall rating'] < min_overall_rating:
+                            if overall_rating < min_overall_rating:
                                 continue
                             
                             # Tính điểm dựa trên độ tương thích và các yếu tố quan trọng
@@ -381,7 +385,7 @@ with tab1:
                                 
                                 recommendation_score = (
                                     similarity_score * 0.3 +  # Text similarity
-                                    (company_info['Overall rating'] / 5.0) * 0.2 +  # Company rating
+                                    (overall_rating / 5.0) * 0.2 +  # Company rating
                                     (preference_score / 5.0) * 0.2 +  # User preferences
                                     cosine_sim_score * 0.3  # Cosine similarity
                                 )
@@ -391,7 +395,7 @@ with tab1:
                                     "Company Name": company_info['Company Name'],
                                     "Company Type": company_info['Company Type'],
                                     "Company size": company_info['Company size'],
-                                    "Overall rating": company_info['Overall rating'],
+                                    "Overall rating": overall_rating,
                                     "Fit Label": fit_label,
                                     "Similarity Score": similarity_score,
                                     "Cosine Score": cosine_sim_score,
@@ -415,7 +419,7 @@ with tab1:
                                     "Company Name": company_info['Company Name'],
                                     "Company Type": company_info['Company Type'],
                                     "Company size": company_info['Company size'],
-                                    "Overall rating": company_info['Overall rating'],
+                                    "Overall rating": overall_rating,
                                     "Fit Label": fit_label,
                                     "Similarity Score": similarity_score,
                                     "Cosine Score": 0.0,
