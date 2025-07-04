@@ -3,10 +3,10 @@ pandas
 numpy
 scikit-learn
 joblib
-gensim
 matplotlib
 seaborn
+openpyxl
+gensim
 underthesea
 xgboost
-imblearn
-openpyxl
+imbalanced-learn

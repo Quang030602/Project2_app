@@ -1,29 +1,72 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import joblib
-import matplotlib.pyplot as plt
-import seaborn as sns
-import gensim
 import re
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder, StandardScaler
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics.pairwise import cosine_similarity
-from gensim import models as gensim_models, corpora, similarities
-from sklearn.cluster import KMeans
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.svm import SVC
-from scipy.sparse import hstack
-import xgboost as xgb
+import os
+import warnings
 
-from sklearn.metrics import (
-    precision_score, recall_score, f1_score, accuracy_score, confusion_matrix,
-    roc_auc_score, roc_curve
-)
+# Core ML imports with error handling
+try:
+    import joblib
+    JOBLIB_AVAILABLE = True
+except ImportError:
+    JOBLIB_AVAILABLE = False
+    st.warning("⚠️ joblib not available. Model loading will be disabled.")
+
+try:
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    PLOTTING_AVAILABLE = True
+except ImportError:
+    PLOTTING_AVAILABLE = False
+    st.warning("⚠️ matplotlib/seaborn not available. Plots will be disabled.")
+
+try:
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.model_selection import train_test_split
+    from sklearn.preprocessing import LabelEncoder, StandardScaler
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics.pairwise import cosine_similarity
+    from sklearn.cluster import KMeans
+    from sklearn.neighbors import KNeighborsClassifier
+    from sklearn.tree import DecisionTreeClassifier
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.svm import SVC
+    from sklearn.metrics import (
+        precision_score, recall_score, f1_score, accuracy_score, confusion_matrix,
+        roc_auc_score, roc_curve
+    )
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+    st.error("❌ scikit-learn not available. ML features will be disabled.")
+
+try:
+    import gensim
+    from gensim import models as gensim_models, corpora, similarities
+    GENSIM_AVAILABLE = True
+except ImportError:
+    GENSIM_AVAILABLE = False
+    # Create dummy objects to prevent NameError
+    gensim = None
+    gensim_models = None
+    corpora = None
+    similarities = None
+    st.warning("⚠️ gensim not available. Text similarity features will be limited.")
+
+try:
+    from scipy.sparse import hstack
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
+    st.warning("⚠️ scipy not available. Using numpy alternatives.")
+
+try:
+    import xgboost as xgb
+    XGBOOST_AVAILABLE = True
+except ImportError:
+    XGBOOST_AVAILABLE = False
+    st.warning("⚠️ XGBoost not available. Using alternative models.")
 
 # PAGE CONFIG (nên để đầu file)
 st.set_page_config(page_title="Project 02 - Company Recommendation & Candidate Classification", layout="wide")
@@ -63,6 +106,40 @@ COMPANY_FILE = "Overview_Companies.xlsx"
 REVIEW_FILE = "Reviews.xlsx"
 OVERVIEW_REVIEW_FILE = "Overview_Reviews.xlsx"
 
+# Alternative function for sparse matrix concatenation when scipy is not available
+def safe_hstack(matrices):
+    """Safe horizontal stack that works with or without scipy"""
+    if SCIPY_AVAILABLE:
+        from scipy.sparse import hstack
+        return hstack(matrices)
+    else:
+        # Fallback: convert to dense and use numpy
+        dense_matrices = []
+        for matrix in matrices:
+            if hasattr(matrix, 'toarray'):
+                dense_matrices.append(matrix.toarray())
+            else:
+                dense_matrices.append(np.array(matrix))
+        return np.hstack(dense_matrices)
+
+# Alternative cosine similarity function when sklearn is not available
+def safe_cosine_similarity(X, Y=None):
+    """Safe cosine similarity that works with or without sklearn"""
+    if SKLEARN_AVAILABLE:
+        from sklearn.metrics.pairwise import cosine_similarity
+        return cosine_similarity(X, Y)
+    else:
+        # Simple numpy implementation
+        if Y is None:
+            Y = X
+        
+        # Normalize vectors
+        X_norm = X / np.linalg.norm(X, axis=1, keepdims=True)
+        Y_norm = Y / np.linalg.norm(Y, axis=1, keepdims=True)
+        
+        # Compute cosine similarity
+        return np.dot(X_norm, Y_norm.T)
+
 # ================== TEXT PREPROCESSING FUNCTIONS ==================
 def clean_tokens(tokens):
     cleaned = [re.sub(r'\d+', '', word) for word in tokens]
@@ -81,9 +158,10 @@ def remove_stopwords(tokens):
 # ================== LOAD MODEL & ENCODER ==================
 @st.cache_resource
 def load_all_models():
-    import os
-    import warnings
-    
+    if not JOBLIB_AVAILABLE:
+        st.warning("⚠️ joblib not available. Model loading disabled.")
+        return None, None, None, None
+        
     # Check if all model files exist
     model_files = [
         (LABEL_ENCODER_PATH, "Label Encoder"),
@@ -107,11 +185,15 @@ def load_all_models():
         tfidf_vectorizer = joblib.load(TFIDF_VECTORIZER_PATH)
         
         # Load XGBoost model with warning suppression
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=UserWarning, message=".*If you are loading a serialized model.*")
-            xgb_model = joblib.load(XGB_MODEL_PATH)
+        if XGBOOST_AVAILABLE:
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=UserWarning, message=".*If you are loading a serialized model.*")
+                xgb_model = joblib.load(XGB_MODEL_PATH)
+        else:
+            st.warning("⚠️ XGBoost not available. Using alternative model.")
+            xgb_model = None
             
-        st.success("✅ All models loaded successfully!")
+        st.success("✅ Available models loaded successfully!")
         return label_encoder, onehot_encoder, tfidf_vectorizer, xgb_model
         
     except Exception as e:
@@ -132,7 +214,13 @@ def load_data():
 def load_and_process_recommendation_data():
     df = pd.read_excel(COMPANY_FILE)
     df = df[['Company Name', 'Company overview']].dropna().copy()
-    df['tokens'] = df['Company overview'].apply(lambda x: gensim.utils.simple_preprocess(x))
+    
+    if GENSIM_AVAILABLE:
+        df['tokens'] = df['Company overview'].apply(lambda x: gensim.utils.simple_preprocess(x))
+    else:
+        # Simple tokenization fallback
+        df['tokens'] = df['Company overview'].apply(lambda x: x.lower().split())
+    
     df['tokens_cleaned'] = df['tokens'].apply(clean_tokens)
     df['tokens_final'] = df['tokens_cleaned'].apply(remove_stopwords)
     df = df[df['tokens_final'].str.len() > 0].copy()
@@ -145,12 +233,39 @@ df_companies, df_reviews, df_overview_reviews = load_data()
 st.title("Project 02 - Company Recommendation & Candidate Classification")
 st.caption("Team: Nguyen Quynh Oanh Thao - Nguyen Le Minh Quang")
 
+# Show installation info if dependencies are missing
+missing_deps = []
+if not SKLEARN_AVAILABLE:
+    missing_deps.append("scikit-learn")
+if not PLOTTING_AVAILABLE:
+    missing_deps.append("matplotlib/seaborn")
+if not GENSIM_AVAILABLE:
+    missing_deps.append("gensim")
+
+if missing_deps:
+    with st.expander("🔧 Installation Help"):
+        st.write("**Missing dependencies detected:**")
+        for dep in missing_deps:
+            st.write(f"- {dep}")
+        st.write("**To install missing packages:**")
+        st.code("pip install -r requirements_minimal.txt", language="bash")
+        st.write("**Or install individually:**")
+        st.code("pip install streamlit pandas numpy scikit-learn==1.3.0 matplotlib seaborn openpyxl", language="bash")
+        st.info("💡 If you encounter compilation errors, try using conda instead: `conda install scikit-learn matplotlib seaborn`")
+
 # Tabs for Topic 1 and Topic 2
 tab1, tab2 = st.tabs(["🔍 Topic 1: Company Recommendation", "🧠 Topic 2: Candidate Classification"])
 
 # ================== TOPIC 1: COMPANY RECOMMENDATION ==================
 with tab1:
     st.header("Topic 1: Content-Based Company Recommendation System")
+    
+    if not SKLEARN_AVAILABLE:
+        st.error("❌ scikit-learn is required for this feature. Please install it with: pip install scikit-learn")
+        st.stop()
+    
+    if not GENSIM_AVAILABLE:
+        st.warning("⚠️ Note: Gensim is not available. The system will use simpler text processing methods.")
     
     # Load and process data for recommendation
     df_rec = load_and_process_recommendation_data()
@@ -171,9 +286,9 @@ with tab1:
         y = le.fit_transform(df_rec['label'])
         
         # Create cosine similarity features
-        cosine_sim = cosine_similarity(X, X)
+        cosine_sim = safe_cosine_similarity(X.toarray() if hasattr(X, 'toarray') else X)
         ref_sim = cosine_sim[0].reshape(-1, 1)
-        X_with_sim = hstack([X, ref_sim])
+        X_with_sim = safe_hstack([X, ref_sim])
         
         X_train, X_test, y_train, y_test = train_test_split(X_with_sim, y, test_size=0.5, random_state=42, stratify=y)
 
@@ -226,12 +341,20 @@ with tab1:
 
             st.pyplot(fig)
 
-        # Setup Gensim similarity
-        dictionary = corpora.Dictionary(df_rec['tokens_final'])
-        corpus = [dictionary.doc2bow(text) for text in df_rec['tokens_final']]
-        tfidf_model = gensim_models.TfidfModel(corpus)
-        corpus_tfidf = tfidf_model[corpus]
-        index = similarities.SparseMatrixSimilarity(corpus_tfidf, num_features=len(dictionary))
+        # Setup Gensim similarity (if available)
+        if GENSIM_AVAILABLE:
+            dictionary = corpora.Dictionary(df_rec['tokens_final'])
+            corpus = [dictionary.doc2bow(text) for text in df_rec['tokens_final']]
+            tfidf_model = gensim_models.TfidfModel(corpus)
+            corpus_tfidf = tfidf_model[corpus]
+            index = similarities.SparseMatrixSimilarity(corpus_tfidf, num_features=len(dictionary))
+        else:
+            dictionary = None
+            corpus = None
+            tfidf_model = None
+            corpus_tfidf = None
+            index = None
+            st.warning("⚠️ Gensim not available. Text similarity will use basic methods only.")
 
         # Selected model info
         st.markdown("## ✅ Company Recommendation System")
@@ -325,13 +448,24 @@ with tab1:
                 # Thêm spinner để hiển thị loading
                 with st.spinner('🔄 Đang phân tích và tìm kiếm công ty phù hợp...'):
                     # Process input text
-                    input_tokens = gensim.utils.simple_preprocess(input_text)
-                    input_tokens_clean = remove_stopwords(clean_tokens(input_tokens))
-                    input_bow = dictionary.doc2bow(input_tokens_clean)
+                    if GENSIM_AVAILABLE:
+                        input_tokens = gensim.utils.simple_preprocess(input_text)
+                        input_tokens_clean = remove_stopwords(clean_tokens(input_tokens))
+                        input_bow = dictionary.doc2bow(input_tokens_clean)
 
-                    # Calculate similarities using Gensim
-                    sims = index[tfidf_model[input_bow]]
-                    ranked = sorted(enumerate(sims), key=lambda x: -x[1])
+                        # Calculate similarities using Gensim
+                        sims = index[tfidf_model[input_bow]]
+                        ranked = sorted(enumerate(sims), key=lambda x: -x[1])
+                    else:
+                        # Fallback: simple text processing
+                        input_tokens = input_text.lower().split()
+                        input_tokens_clean = remove_stopwords(clean_tokens(input_tokens))
+                        
+                        # Use TF-IDF similarity as fallback
+                        input_tfidf = vectorizer.transform([' '.join(input_tokens_clean)])
+                        text_matrix = vectorizer.transform(df_rec['joined_tokens'])
+                        sims = safe_cosine_similarity(input_tfidf, text_matrix)[0]
+                        ranked = sorted(enumerate(sims), key=lambda x: -x[1])
 
                     # Use Random Forest to predict company fit levels
                     input_tfidf = vectorizer.transform([' '.join(input_tokens_clean)])
@@ -388,11 +522,12 @@ with tab1:
                             
 
                             # Tính cosine similarity với input
-                            cosine_sim_score = cosine_similarity(input_tfidf, company_text_vector)[0][0]
+                            cosine_sim_score = safe_cosine_similarity(input_tfidf.toarray() if hasattr(input_tfidf, 'toarray') else input_tfidf, 
+                                                                    company_text_vector.toarray() if hasattr(company_text_vector, 'toarray') else company_text_vector)[0][0]
                             
 
                             # Kết hợp features như lúc training: [text_features, cosine_similarity]
-                            rf_features = hstack([company_text_vector, np.array([[cosine_sim_score]])])
+                            rf_features = safe_hstack([company_text_vector, np.array([[cosine_sim_score]])])
                             
 
                             # Dự đoán mức độ phù hợp của công ty với Random Forest
@@ -547,22 +682,20 @@ with tab2:
     # Load additional libraries for Topic 2
     try:
         from underthesea import word_tokenize
-        from collections import Counter
-        from scipy.sparse import hstack
-        from sklearn.preprocessing import StandardScaler
+        UNDERTHESEA_AVAILABLE = True
+    except ImportError:
+        UNDERTHESEA_AVAILABLE = False
+        st.info("ℹ️ underthesea not available. Using simple tokenization.")
         
-        # Try to import SMOTE, but continue without it if not available
-        try:
-            from imblearn.over_sampling import SMOTE
-            SMOTE_AVAILABLE = True
-        except ImportError:
-            SMOTE_AVAILABLE = False
-            st.info("ℹ️ SMOTE not available for balancing data. Install with: pip install imbalanced-learn")
-            
-    except ImportError as e:
-        st.error(f"❌ Missing required libraries: {str(e)}")
-        st.info("Please install: pip install underthesea imbalanced-learn xgboost")
-        st.stop()
+    from collections import Counter
+    
+    # Try to import SMOTE, but continue without it if not available
+    try:
+        from imblearn.over_sampling import SMOTE
+        SMOTE_AVAILABLE = True
+    except ImportError:
+        SMOTE_AVAILABLE = False
+        st.info("ℹ️ SMOTE not available for balancing data. Install with: pip install imbalanced-learn")
 
     # Load data function for Topic 2
     @st.cache_data
@@ -641,11 +774,13 @@ with tab2:
         text = re.sub(r'\d+', ' ', text)
         text = re.sub(r'\s+', ' ', text)
         
-        # Use simple split if underthesea fails
-        try:
-            text = word_tokenize(text, format="text")
-        except:
-            pass
+        # Use underthesea if available, otherwise use simple split
+        if UNDERTHESEA_AVAILABLE:
+            try:
+                from underthesea import word_tokenize
+                text = word_tokenize(text, format="text")
+            except:
+                pass  # Fall back to simple split
             
         words = [w for w in text.split() if w not in stopwords and w not in wrong_words and len(w) > 2]
         return " ".join(words)
@@ -824,9 +959,13 @@ with tab2:
                             
                             # Combine features
                             if numerical_features:
-                                scaler = StandardScaler()
-                                numerical_scaled = scaler.fit_transform(np.hstack(numerical_features))
-                                X_combined = hstack([X_text, numerical_scaled])
+                                if SKLEARN_AVAILABLE:
+                                    scaler = StandardScaler()
+                                    numerical_scaled = scaler.fit_transform(np.hstack(numerical_features))
+                                    X_combined = safe_hstack([X_text, numerical_scaled])
+                                else:
+                                    st.error("❌ scikit-learn required for numerical feature scaling")
+                                    X_combined = X_text
                             else:
                                 X_combined = X_text
                             
@@ -847,7 +986,12 @@ with tab2:
                                 
                                 # Train XGBoost model
                                 with st.spinner("🔄 Training prediction model..."):
-                                    model = xgb.XGBClassifier(random_state=42, eval_metric='logloss')
+                                    if XGBOOST_AVAILABLE:
+                                        model = xgb.XGBClassifier(random_state=42, eval_metric='logloss')
+                                    else:
+                                        st.warning("⚠️ XGBoost not available. Using Random Forest instead.")
+                                        model = RandomForestClassifier(random_state=42, n_estimators=100)
+                                    
                                     model.fit(X_train, y_train)
                                     
                                     # Evaluate model
@@ -855,7 +999,8 @@ with tab2:
                                     accuracy = accuracy_score(y_test, y_pred)
                                     f1 = f1_score(y_test, y_pred)
                                     
-                                    st.success(f"✅ Model trained successfully! Accuracy: {accuracy:.3f}, F1-Score: {f1:.3f}")
+                                    model_name = "XGBoost" if XGBOOST_AVAILABLE else "Random Forest"
+                                    st.success(f"✅ {model_name} model trained successfully! Accuracy: {accuracy:.3f}, F1-Score: {f1:.3f}")
                                 
                                 # Prediction for selected company
                                 st.subheader("🔮 Dự đoán cho công ty được chọn")
@@ -870,7 +1015,7 @@ with tab2:
                                     if numerical_features:
                                         company_numerical = company_reviews['Overall rating'].fillna(3.0).values.reshape(-1, 1)
                                         company_numerical_scaled = scaler.transform(company_numerical)
-                                        company_X_combined = hstack([company_X_text, company_numerical_scaled])
+                                        company_X_combined = safe_hstack([company_X_text, company_numerical_scaled])
                                     else:
                                         company_X_combined = company_X_text
                                     
@@ -990,7 +1135,7 @@ with tab2:
                                             if numerical_features:
                                                 user_numerical = np.array([[user_rating]])
                                                 user_numerical_scaled = scaler.transform(user_numerical)
-                                                user_X_combined = hstack([user_X_text, user_numerical_scaled])
+                                                user_X_combined = safe_hstack([user_X_text, user_numerical_scaled])
                                             else:
                                                 user_X_combined = user_X_text
                                             
