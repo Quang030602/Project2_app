@@ -52,21 +52,18 @@ except ImportError:
     gensim_models = None
     corpora = None
     similarities = None
-    st.warning("⚠️ gensim not available. Text similarity features will be limited.")
 
 try:
     from scipy.sparse import hstack
     SCIPY_AVAILABLE = True
 except ImportError:
     SCIPY_AVAILABLE = False
-    st.warning("⚠️ scipy not available. Using numpy alternatives.")
 
 try:
     import xgboost as xgb
     XGBOOST_AVAILABLE = True
 except ImportError:
     XGBOOST_AVAILABLE = False
-    st.warning("⚠️ XGBoost not available. Using alternative models.")
 
 # PAGE CONFIG (nên để đầu file)
 st.set_page_config(page_title="Project 02 - Company Recommendation & Candidate Classification", layout="wide")
@@ -180,9 +177,13 @@ def load_all_models():
         return None, None, None, None
     
     try:
-        label_encoder = joblib.load(LABEL_ENCODER_PATH)
-        onehot_encoder = joblib.load(ONEHOT_ENCODER_PATH)
-        tfidf_vectorizer = joblib.load(TFIDF_VECTORIZER_PATH)
+        # Suppress scikit-learn version warnings
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=UserWarning, message=".*Trying to unpickle estimator.*")
+            
+            label_encoder = joblib.load(LABEL_ENCODER_PATH)
+            onehot_encoder = joblib.load(ONEHOT_ENCODER_PATH)
+            tfidf_vectorizer = joblib.load(TFIDF_VECTORIZER_PATH)
         
         # Load XGBoost model with warning suppression
         if XGBOOST_AVAILABLE:
@@ -190,7 +191,6 @@ def load_all_models():
                 warnings.filterwarnings("ignore", category=UserWarning, message=".*If you are loading a serialized model.*")
                 xgb_model = joblib.load(XGB_MODEL_PATH)
         else:
-            st.warning("⚠️ XGBoost not available. Using alternative model.")
             xgb_model = None
             
         st.success("✅ Available models loaded successfully!")
@@ -233,25 +233,54 @@ df_companies, df_reviews, df_overview_reviews = load_data()
 st.title("Project 02 - Company Recommendation & Candidate Classification")
 st.caption("Team: Nguyen Quynh Oanh Thao - Nguyen Le Minh Quang")
 
+# Show status information
+if SKLEARN_AVAILABLE and not GENSIM_AVAILABLE:
+    st.info("ℹ️ Running in **Basic Mode** - Core ML features available, advanced text processing disabled due to missing gensim.")
+elif not SKLEARN_AVAILABLE:
+    st.error("⚠️ Running in **Limited Mode** - Please install scikit-learn for full functionality.")
+else:
+    st.success("✅ Running in **Full Mode** - All features available!")
+
 # Show installation info if dependencies are missing
 missing_deps = []
-if not SKLEARN_AVAILABLE:
-    missing_deps.append("scikit-learn")
-if not PLOTTING_AVAILABLE:
-    missing_deps.append("matplotlib/seaborn")
-if not GENSIM_AVAILABLE:
-    missing_deps.append("gensim")
+optional_deps = []
 
-if missing_deps:
-    with st.expander("🔧 Installation Help"):
-        st.write("**Missing dependencies detected:**")
-        for dep in missing_deps:
-            st.write(f"- {dep}")
-        st.write("**To install missing packages:**")
-        st.code("pip install -r requirements_minimal.txt", language="bash")
-        st.write("**Or install individually:**")
-        st.code("pip install streamlit pandas numpy scikit-learn==1.3.0 matplotlib seaborn openpyxl", language="bash")
-        st.info("💡 If you encounter compilation errors, try using conda instead: `conda install scikit-learn matplotlib seaborn`")
+if not SKLEARN_AVAILABLE:
+    missing_deps.append("scikit-learn (REQUIRED)")
+if not PLOTTING_AVAILABLE:
+    missing_deps.append("matplotlib/seaborn (REQUIRED)")
+
+if not GENSIM_AVAILABLE:
+    optional_deps.append("gensim (advanced text processing)")
+if not XGBOOST_AVAILABLE:
+    optional_deps.append("xgboost (advanced ML models)")
+if not SCIPY_AVAILABLE:
+    optional_deps.append("scipy (sparse matrix operations)")
+
+if missing_deps or optional_deps:
+    with st.expander("🔧 Installation Status & Help"):
+        if missing_deps:
+            st.error("**❌ Missing Critical Dependencies:**")
+            for dep in missing_deps:
+                st.write(f"- {dep}")
+            st.write("**To install missing packages:**")
+            st.code("pip install -r requirements_minimal.txt", language="bash")
+        
+        if optional_deps:
+            st.info("**ℹ️ Optional Dependencies (for enhanced features):**")
+            for dep in optional_deps:
+                st.write(f"- {dep}")
+            st.write("**To install optional packages:**")
+            st.code("pip install -r requirements.txt", language="bash")
+        
+        st.write("**Alternative installation methods:**")
+        st.code("pip install streamlit pandas numpy scikit-learn matplotlib seaborn openpyxl", language="bash")
+        st.write("**For version compatibility:**")
+        st.code("pip install scikit-learn>=1.0.0,<1.4.0", language="bash")
+        st.info("💡 If you encounter compilation errors, try using conda: `conda install scikit-learn matplotlib seaborn gensim`")
+        
+        if len(missing_deps) == 0:
+            st.success("✅ All core dependencies are available! Optional features may be limited.")
 
 # Tabs for Topic 1 and Topic 2
 tab1, tab2 = st.tabs(["🔍 Topic 1: Company Recommendation", "🧠 Topic 2: Candidate Classification"])
@@ -265,7 +294,7 @@ with tab1:
         st.stop()
     
     if not GENSIM_AVAILABLE:
-        st.warning("⚠️ Note: Gensim is not available. The system will use simpler text processing methods.")
+        st.info("ℹ️ **Note**: Advanced text similarity (Gensim) is not available. The system will use TF-IDF cosine similarity as an alternative.")
     
     # Load and process data for recommendation
     df_rec = load_and_process_recommendation_data()
@@ -354,7 +383,6 @@ with tab1:
             tfidf_model = None
             corpus_tfidf = None
             index = None
-            st.warning("⚠️ Gensim not available. Text similarity will use basic methods only.")
 
         # Selected model info
         st.markdown("## ✅ Company Recommendation System")
