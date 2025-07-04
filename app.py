@@ -532,10 +532,17 @@ with tab1:
     else:
         st.warning("Không thể tải hoặc công ty không có dữ liệu.")
 
-# ================== TOPIC 2: CANDIDATE FIT CLASSIFICATION ==================
+# ================== TOPIC 2: COMPANY RECOMMENDATION PREDICTION ==================
 with tab2:
-    st.header("Topic 2: Candidate Fit Classification")
-    st.markdown("Dựa trên thông tin đánh giá từ nhân viên đã review trên ITViec, dự đoán xem họ có recommend công ty hay không.")
+    st.header("Topic 2: Employee Recommendation Prediction")
+    st.markdown("""
+    **Dự đoán xem nhân viên có recommend công ty hay không dựa trên đánh giá từ ITViec**
+    
+    Chọn một công ty cụ thể để:
+    - 📊 Xem phân tích tổng quan về các đánh giá
+    - 🤖 Huấn luyện model dự đoán recommendation
+    - 🔮 Dự đoán recommendation từ đánh giá mới
+    """)
     
     # Load additional libraries for Topic 2
     try:
@@ -694,113 +701,370 @@ with tab2:
                 df_reviews['Suggestions_clean'] = df_reviews['Suggestions for improvement'].apply(suggest_improvement)
                 df_reviews['text_combined'] = df_reviews['What I liked_clean'] + ' ' + df_reviews['Suggestions_clean']
             
-            # Display data overview
-            st.subheader("📊 Data Overview")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Total Reviews", len(df_reviews))
-            with col2:
-                recommend_dist = df_reviews['Recommend?'].value_counts()
-                st.metric("Recommend: Yes", recommend_dist.get('Yes', 0))
-            with col3:
-                st.metric("Recommend: No", recommend_dist.get('No', 0))
+            # Company selection section
+            st.subheader("🏢 Chọn công ty để phân tích")
             
-            # Show recommendation distribution
-            if len(recommend_dist) > 0:
-                st.subheader("📈 Recommendation Distribution")
-                fig_dist, ax = plt.subplots(figsize=(8, 4))
-                recommend_dist.plot(kind='bar', ax=ax, color=['#FF6B6B', '#4ECDC4'])
-                ax.set_title('Distribution of Recommendations')
-                ax.set_xlabel('Recommendation')
-                ax.set_ylabel('Count')
-                plt.xticks(rotation=0)
-                st.pyplot(fig_dist)
+            # Get list of companies with reviews
+            companies_with_reviews = df_reviews['Company Name'].dropna().unique().tolist()
+            companies_with_reviews.sort()
+            
+            if len(companies_with_reviews) > 0:
+                selected_company = st.selectbox(
+                    "Chọn công ty:", 
+                    companies_with_reviews,
+                    key="company_select"
+                )
                 
-            # Add model training and prediction section
-            st.subheader("🤖 Machine Learning Models")
-            
-            # Prepare features for ML
-            if len(df_reviews) > 100:  # Only train if we have enough data
-                try:
-                    # Feature engineering
-                    tfidf = TfidfVectorizer(max_features=5000, ngram_range=(1, 2), stop_words='english')
-                    X_text = tfidf.fit_transform(df_reviews['text_combined'].fillna(''))
+                if selected_company:
+                    # Filter reviews for selected company
+                    company_reviews = df_reviews[df_reviews['Company Name'] == selected_company].copy()
                     
-                    # Add numerical features
-                    numerical_features = []
-                    if 'Overall rating' in df_reviews.columns:
-                        numerical_features.append(df_reviews['Overall rating'].fillna(3.0).values.reshape(-1, 1))
+                    # Display company overview
+                    st.subheader(f"📊 Tổng quan về {selected_company}")
                     
-                    # Combine features
-                    if numerical_features:
-                        scaler = StandardScaler()
-                        numerical_scaled = scaler.fit_transform(np.hstack(numerical_features))
-                        X_combined = hstack([X_text, numerical_scaled])
-                    else:
-                        X_combined = X_text
-                    
-                    # Convert to CSR format for indexing
-                    X_combined = X_combined.tocsr()
-                    
-                    # Prepare target variable
-                    y = df_reviews['Recommend?'].map({'Yes': 1, 'No': 0})
-                    y = y.dropna()
-                    
-                    # Handle sparse matrix indexing properly
-                    valid_indices = y.index.tolist()
-                    X_final = X_combined[valid_indices]
-                    
-                    if len(y) > 50 and len(y.unique()) > 1:  # Ensure we have enough samples and both classes
-                        # Split data
-                        X_train, X_test, y_train, y_test = train_test_split(X_final, y, test_size=0.3, random_state=42, stratify=y)
-                        
-                        # Handle imbalanced data
-                        if SMOTE_AVAILABLE and len(y_train) > 100:
-                            try:
-                                smote = SMOTE(random_state=42)
-                                X_train_balanced, y_train_balanced = smote.fit_resample(X_train, y_train)
-                                st.info("✅ Data balanced using SMOTE")
-                            except Exception as smote_error:
-                                X_train_balanced, y_train_balanced = X_train, y_train
-                                st.warning(f"SMOTE failed: {smote_error}. Using original data.")
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("Tổng số reviews", len(company_reviews))
+                    with col2:
+                        recommend_count = (company_reviews['Recommend?'] == 'Yes').sum()
+                        st.metric("Recommend: Yes", recommend_count)
+                    with col3:
+                        not_recommend_count = (company_reviews['Recommend?'] == 'No').sum()
+                        st.metric("Recommend: No", not_recommend_count)
+                    with col4:
+                        if len(company_reviews) > 0:
+                            recommend_rate = (recommend_count / len(company_reviews)) * 100
+                            st.metric("Tỷ lệ Recommend", f"{recommend_rate:.1f}%")
                         else:
-                            X_train_balanced, y_train_balanced = X_train, y_train
-                            if not SMOTE_AVAILABLE:
-                                st.info("ℹ️ Using original data without balancing")
+                            st.metric("Tỷ lệ Recommend", "0%")
+                    
+                    # Show recommendation distribution for selected company
+                    if len(company_reviews) > 0:
+                        st.subheader("📈 Phân bố Recommendation")
+                        recommend_dist = company_reviews['Recommend?'].value_counts()
                         
-                        # Train models
-                        models = {
-                            'Logistic Regression': LogisticRegression(random_state=42, max_iter=1000),
-                            'SVM': SVC(random_state=42, probability=True),
-                            'XGBoost': xgb.XGBClassifier(random_state=42, eval_metric='logloss')
-                        }
+                        if len(recommend_dist) > 0:
+                            fig_company, ax = plt.subplots(figsize=(8, 4))
+                            recommend_dist.plot(kind='bar', ax=ax, color=['#FF6B6B', '#4ECDC4'])
+                            ax.set_title(f'Recommendation Distribution - {selected_company}')
+                            ax.set_xlabel('Recommendation')
+                            ax.set_ylabel('Count')
+                            plt.xticks(rotation=0)
+                            st.pyplot(fig_company)
+                    
+                    # Show sample reviews
+                    st.subheader("📝 Một số đánh giá mẫu")
+                    sample_reviews = company_reviews.head(5)
+                    
+                    for idx, row in sample_reviews.iterrows():
+                        with st.expander(f"Review {idx+1} - Recommend: {row['Recommend?']}"):
+                            st.write("**Điều thích:**")
+                            st.write(row['What I liked'] if pd.notna(row['What I liked']) else "Không có thông tin")
+                            st.write("**Gợi ý cải thiện:**")
+                            st.write(row['Suggestions for improvement'] if pd.notna(row['Suggestions for improvement']) else "Không có gợi ý")
+                    
+                    # Word analysis section
+                    st.subheader("📈 Phân tích từ khóa trong đánh giá")
+                    
+                    if len(company_reviews) > 0:
+                        # Analyze positive reviews (Recommend = Yes)
+                        positive_reviews = company_reviews[company_reviews['Recommend?'] == 'Yes']
+                        negative_reviews = company_reviews[company_reviews['Recommend?'] == 'No']
                         
-                        results = {}
-                        for name, model in models.items():
-                            with st.spinner(f"Training {name}..."):
-                                model.fit(X_train_balanced, y_train_balanced)
-                                y_pred = model.predict(X_test)
-                                accuracy = accuracy_score(y_test, y_pred)
-                                f1 = f1_score(y_test, y_pred)
-                                results[name] = {'accuracy': accuracy, 'f1': f1, 'model': model}
+                        col1, col2 = st.columns(2)
                         
-                        # Display results
-                        st.write("### Model Performance:")
-                        results_df = pd.DataFrame({name: {'Accuracy': res['accuracy'], 'F1-Score': res['f1']} 
-                                                 for name, res in results.items()}).T
-                        st.dataframe(results_df.round(4))
+                        with col1:
+                            st.write("**🟢 Từ khóa trong reviews RECOMMEND:**")
+                            if len(positive_reviews) > 0:
+                                positive_text = ' '.join(positive_reviews['What I liked_clean'].fillna('').astype(str))
+                                if positive_text.strip():
+                                    positive_words = positive_text.split()
+                                    positive_word_freq = Counter(positive_words)
+                                    top_positive = positive_word_freq.most_common(10)
+                                    
+                                    for word, count in top_positive:
+                                        if len(word) > 2:  # Skip short words
+                                            st.write(f"- {word}: {count} lần")
+                                else:
+                                    st.write("Không có dữ liệu")
+                            else:
+                                st.write("Không có reviews recommend")
                         
-                        # Show best model
-                        best_model_name = max(results.keys(), key=lambda x: results[x]['f1'])
-                        st.success(f"🏆 Best Model: **{best_model_name}** (F1-Score: {results[best_model_name]['f1']:.4f})")
-                        
+                        with col2:
+                            st.write("**🔴 Từ khóa trong reviews KHÔNG RECOMMEND:**")
+                            if len(negative_reviews) > 0:
+                                negative_text = ' '.join(negative_reviews['What I liked_clean'].fillna('').astype(str))
+                                if negative_text.strip():
+                                    negative_words = negative_text.split()
+                                    negative_word_freq = Counter(negative_words)
+                                    top_negative = negative_word_freq.most_common(10)
+                                    
+                                    for word, count in top_negative:
+                                        if len(word) > 2:  # Skip short words
+                                            st.write(f"- {word}: {count} lần")
+                                else:
+                                    st.write("Không có dữ liệu")
+                            else:
+                                st.write("Không có reviews không recommend")
+                    
+                    # Machine Learning Prediction Section
+                    st.subheader("🤖 Dự đoán Recommendation cho công ty")
+                    
+                    # Train model if enough data
+                    if len(df_reviews) > 100:
+                        try:
+                            # Feature engineering
+                            tfidf = TfidfVectorizer(max_features=5000, ngram_range=(1, 2), stop_words='english')
+                            X_text = tfidf.fit_transform(df_reviews['text_combined'].fillna(''))
+                            
+                            # Add numerical features
+                            numerical_features = []
+                            if 'Overall rating' in df_reviews.columns:
+                                numerical_features.append(df_reviews['Overall rating'].fillna(3.0).values.reshape(-1, 1))
+                            
+                            # Combine features
+                            if numerical_features:
+                                scaler = StandardScaler()
+                                numerical_scaled = scaler.fit_transform(np.hstack(numerical_features))
+                                X_combined = hstack([X_text, numerical_scaled])
+                            else:
+                                X_combined = X_text
+                            
+                            # Convert to CSR format for indexing
+                            X_combined = X_combined.tocsr()
+                            
+                            # Prepare target variable
+                            y = df_reviews['Recommend?'].map({'Yes': 1, 'No': 0})
+                            y = y.dropna()
+                            
+                            # Handle sparse matrix indexing properly
+                            valid_indices = y.index.tolist()
+                            X_final = X_combined[valid_indices]
+                            
+                            if len(y) > 50 and len(y.unique()) > 1:
+                                # Split data
+                                X_train, X_test, y_train, y_test = train_test_split(X_final, y, test_size=0.3, random_state=42, stratify=y)
+                                
+                                # Train XGBoost model
+                                with st.spinner("🔄 Training prediction model..."):
+                                    model = xgb.XGBClassifier(random_state=42, eval_metric='logloss')
+                                    model.fit(X_train, y_train)
+                                    
+                                    # Evaluate model
+                                    y_pred = model.predict(X_test)
+                                    accuracy = accuracy_score(y_test, y_pred)
+                                    f1 = f1_score(y_test, y_pred)
+                                    
+                                    st.success(f"✅ Model trained successfully! Accuracy: {accuracy:.3f}, F1-Score: {f1:.3f}")
+                                
+                                # Prediction for selected company
+                                st.subheader("🔮 Dự đoán cho công ty được chọn")
+                                
+                                # Get company-specific features
+                                company_text_features = company_reviews['text_combined'].fillna('')
+                                
+                                if len(company_text_features) > 0:
+                                    # Transform company features
+                                    company_X_text = tfidf.transform(company_text_features)
+                                    
+                                    if numerical_features:
+                                        company_numerical = company_reviews['Overall rating'].fillna(3.0).values.reshape(-1, 1)
+                                        company_numerical_scaled = scaler.transform(company_numerical)
+                                        company_X_combined = hstack([company_X_text, company_numerical_scaled])
+                                    else:
+                                        company_X_combined = company_X_text
+                                    
+                                    # Make predictions
+                                    predictions = model.predict(company_X_combined)
+                                    prediction_probs = model.predict_proba(company_X_combined)
+                                    
+                                    # Calculate statistics
+                                    predicted_recommend = np.sum(predictions)
+                                    total_predictions = len(predictions)
+                                    predicted_recommend_rate = (predicted_recommend / total_predictions) * 100
+                                    
+                                    # Display results
+                                    col1, col2, col3 = st.columns(3)
+                                    with col1:
+                                        st.metric("Predicted Recommend", predicted_recommend)
+                                    with col2:
+                                        st.metric("Total Predictions", total_predictions)
+                                    with col3:
+                                        st.metric("Predicted Recommend Rate", f"{predicted_recommend_rate:.1f}%")
+                                    
+                                    # Show prediction confidence
+                                    avg_confidence = np.mean(np.max(prediction_probs, axis=1))
+                                    st.metric("Average Prediction Confidence", f"{avg_confidence:.3f}")
+                                    
+                                    # Compare with actual
+                                    actual_recommend = (company_reviews['Recommend?'] == 'Yes').sum()
+                                    actual_rate = (actual_recommend / len(company_reviews)) * 100
+                                    
+                                    st.subheader("📊 So sánh Dự đoán vs Thực tế")
+                                    
+                                    # Create comparison using columns instead of dataframe to avoid Arrow conversion issues
+                                    col1, col2 = st.columns(2)
+                                    
+                                    with col1:
+                                        st.write("**Thực tế (Actual):**")
+                                        st.write(f"- Recommend Count: {actual_recommend}")
+                                        st.write(f"- Recommend Rate: {actual_rate:.1f}%")
+                                    
+                                    with col2:
+                                        st.write("**Dự đoán (Predicted):**")
+                                        st.write(f"- Recommend Count: {predicted_recommend}")
+                                        st.write(f"- Recommend Rate: {predicted_recommend_rate:.1f}%")
+                                    
+                                    # Show difference
+                                    diff_count = predicted_recommend - actual_recommend
+                                    diff_rate = predicted_recommend_rate - actual_rate
+                                    
+                                    st.write("**Sự khác biệt:**")
+                                    if diff_count > 0:
+                                        st.write(f"- Model dự đoán **cao hơn** {diff_count} recommendations ({diff_rate:+.1f}%)")
+                                    elif diff_count < 0:
+                                        st.write(f"- Model dự đoán **thấp hơn** {abs(diff_count)} recommendations ({diff_rate:+.1f}%)")
+                                    else:
+                                        st.write("- Model dự đoán **chính xác** số lượng recommendations")
+                                    
+                                    # Accuracy indicator
+                                    accuracy_percentage = (1 - abs(diff_rate) / 100) * 100 if actual_rate > 0 else 0
+                                    if accuracy_percentage > 90:
+                                        st.success(f"🎯 Độ chính xác dự đoán: {accuracy_percentage:.1f}% (Rất tốt)")
+                                    elif accuracy_percentage > 70:
+                                        st.info(f"🎯 Độ chính xác dự đoán: {accuracy_percentage:.1f}% (Tốt)")
+                                    else:
+                                        st.warning(f"🎯 Độ chính xác dự đoán: {accuracy_percentage:.1f}% (Cần cải thiện)")
+                                    
+                                    # Prediction distribution
+                                    st.subheader("🎯 Phân bố dự đoán")
+                                    pred_dist = pd.Series(predictions).map({0: 'No', 1: 'Yes'}).value_counts()
+                                    
+                                    fig_pred, ax = plt.subplots(figsize=(8, 4))
+                                    pred_dist.plot(kind='bar', ax=ax, color=['#FF6B6B', '#4ECDC4'])
+                                    ax.set_title(f'Predicted Recommendation Distribution - {selected_company}')
+                                    ax.set_xlabel('Prediction')
+                                    ax.set_ylabel('Count')
+                                    plt.xticks(rotation=0)
+                                    st.pyplot(fig_pred)
+                                    
+                                    # Add user input section for custom prediction
+                                    st.subheader("💬 Dự đoán từ đánh giá của bạn")
+                                    st.write("Nhập đánh giá của bạn về công ty để xem model dự đoán bạn có recommend hay không:")
+                                    
+                                    col1, col2 = st.columns(2)
+                                    
+                                    with col1:
+                                        user_liked = st.text_area(
+                                            "Điều bạn thích về công ty:",
+                                            placeholder="Ví dụ: Môi trường làm việc tốt, đồng nghiệp hòa đồng, lương thưởng hợp lý...",
+                                            height=100,
+                                            key="user_liked_input"
+                                        )
+                                    
+                                    with col2:
+                                        user_suggestions = st.text_area(
+                                            "Gợi ý cải thiện:",
+                                            placeholder="Ví dụ: Cần cải thiện chế độ làm việc, tăng cơ hội đào tạo...",
+                                            height=100,
+                                            key="user_suggestions_input"
+                                        )
+                                    
+                                    # Company rating input
+                                    user_rating = st.slider(
+                                        "Đánh giá overall rating cho công ty (1-5):",
+                                        min_value=1.0, max_value=5.0, value=3.5, step=0.1,
+                                        key="user_rating_input"
+                                    )
+                                    
+                                    if st.button("🔮 Dự đoán từ đánh giá của tôi", type="primary"):
+                                        if user_liked.strip() or user_suggestions.strip():
+                                            # Process user input
+                                            user_liked_clean = clean_text(user_liked, stopwords, wrong_words)
+                                            user_suggestions_clean = suggest_improvement(user_suggestions)
+                                            user_text_combined = user_liked_clean + ' ' + user_suggestions_clean
+                                            
+                                            # Transform user input
+                                            user_X_text = tfidf.transform([user_text_combined])
+                                            
+                                            if numerical_features:
+                                                user_numerical = np.array([[user_rating]])
+                                                user_numerical_scaled = scaler.transform(user_numerical)
+                                                user_X_combined = hstack([user_X_text, user_numerical_scaled])
+                                            else:
+                                                user_X_combined = user_X_text
+                                            
+                                            # Make prediction
+                                            user_prediction = model.predict(user_X_combined)[0]
+                                            user_probability = model.predict_proba(user_X_combined)[0]
+                                            
+                                            # Display results
+                                            st.subheader("🎯 Kết quả dự đoán")
+                                            
+                                            col1, col2, col3 = st.columns(3)
+                                            
+                                            with col1:
+                                                if user_prediction == 1:
+                                                    st.success("✅ **BẠN SẼ RECOMMEND**")
+                                                else:
+                                                    st.error("❌ **BẠN SẼ KHÔNG RECOMMEND**")
+                                            
+                                            with col2:
+                                                confidence = max(user_probability)
+                                                st.metric("Độ tin cậy", f"{confidence:.3f}")
+                                            
+                                            with col3:
+                                                recommend_prob = user_probability[1]
+                                                st.metric("Xác suất Recommend", f"{recommend_prob:.3f}")
+                                            
+                                            # Detailed explanation
+                                            st.write("**Phân tích chi tiết:**")
+                                            st.write(f"- Xác suất **Recommend**: {user_probability[1]:.3f}")
+                                            st.write(f"- Xác suất **Không Recommend**: {user_probability[0]:.3f}")
+                                            st.write(f"- Overall Rating bạn cho: {user_rating}/5.0")
+                                            
+                                            # Recommendation advice
+                                            if user_prediction == 1:
+                                                st.info("💡 **Gợi ý:** Dựa trên đánh giá của bạn, bạn có xu hướng recommend công ty này cho bạn bè.")
+                                            else:
+                                                st.warning("💡 **Gợi ý:** Dựa trên đánh giá của bạn, bạn có thể không recommend công ty này.")
+                                            
+                                            # Compare with company average
+                                            if recommend_prob > predicted_recommend_rate / 100:
+                                                st.success("📊 Đánh giá của bạn **tích cực hơn** trung bình của công ty")
+                                            else:
+                                                st.warning("📊 Đánh giá của bạn **tiêu cực hơn** trung bình của công ty")
+                                        else:
+                                            st.warning("Vui lòng nhập ít nhất một trong hai trường: điều thích hoặc gợi ý cải thiện.")
+                                
+                                else:
+                                    st.warning("No text data available for prediction")
+                                    
+                            else:
+                                st.warning("Not enough data for model training (need >50 samples with both Yes/No recommendations)")
+                                
+                        except Exception as e:
+                            st.error(f"Error in model training: {str(e)}")
                     else:
-                        st.warning("Not enough data for model training (need >50 samples with both Yes/No recommendations)")
+                        st.warning("Not enough data for model training (need >100 reviews)")
                         
-                except Exception as e:
-                    st.error(f"Error in model training: {str(e)}")
+                        # Show basic statistics instead
+                        st.subheader("📈 Thống kê cơ bản")
+                        if len(company_reviews) > 0:
+                            actual_recommend = (company_reviews['Recommend?'] == 'Yes').sum()
+                            actual_rate = (actual_recommend / len(company_reviews)) * 100
+                            
+                            st.write(f"**Tỷ lệ Recommend thực tế:** {actual_rate:.1f}%")
+                            st.write(f"**Dựa trên {len(company_reviews)} reviews hiện có**")
+                            
+                            if actual_rate >= 70:
+                                st.success("🟢 Công ty này có tỷ lệ recommendation cao!")
+                            elif actual_rate >= 50:
+                                st.info("🟡 Công ty này có tỷ lệ recommendation trung bình")
+                            else:
+                                st.warning("🔴 Công ty này có tỷ lệ recommendation thấp")
             else:
-                st.warning("Not enough data for model training (need >100 reviews)")
+                st.warning("No companies found in the review data")
     else:
         st.warning("❌ Could not load review data for classification.")
 
