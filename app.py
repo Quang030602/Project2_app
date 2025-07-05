@@ -386,8 +386,7 @@ with tab1:
 
         # Selected model info
         st.markdown("## ✅ Company Recommendation System")
-        st.write("Sử dụng **Random Forest + TF-IDF + Cosine Similarity** để đề xuất công ty phù hợp với preferences của bạn.")
-        st.info("🏆 **Random Forest** được chọn làm model chính dựa trên performance tốt nhất: F1-score = 0.8649")
+     
         
         # Train Random Forest model cho prediction
         rf_model = RandomForestClassifier(n_estimators=200, class_weight='balanced', random_state=42)
@@ -469,7 +468,7 @@ with tab1:
                                      key="num_results_select")
         
         # Nút để tìm công ty phù hợp
-        if st.button("🔍 Tìm công ty phù hợp (Random Forest)", type="primary"):
+        if st.button("🔍 Tìm công ty phù hợp", type="primary"):
             if not input_text.strip():
                 st.warning("Vui lòng nhập mô tả về công ty mong muốn.")
             else:
